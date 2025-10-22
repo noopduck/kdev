@@ -25,6 +25,7 @@ spec:
       env:
 {{ENVS}}
       securityContext:
+        runAsNonRoot: true
         allowPrivilegeEscalation: false
         capabilities:
           drop: ["ALL"]

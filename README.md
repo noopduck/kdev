@@ -1,0 +1,31 @@
+# kdev (MVP)
+
+A lightweight Go-CLI that spins up, attaches to and cleans up **devpods** (dev container in Kubernetes).
+It wraps arround `kubectl` and renders a simple Pod-template. RBAC, non-root, PVC - everything you enjoy. 😎
+
+## Install
+```bash
+go install ./...
+# eller
+go build -o kdev
+```
+
+## Use
+```bash
+# Create devpod
+./kdev up --name mydev --image registry.local/your/devimage:latest -n dev --env FOO=bar --cpu 1000m --memory 2Gi
+
+# List dev pods
+./kdev ls -n dev
+
+# Attach
+./kdev attach --name mydev -n dev
+
+# Delete pod (Also remove the pvc as long as it's name is the same as the pods name)
+./kdev rm --name mydev -n dev --with-pvc
+```
+
+## Template-variable
+`templates/pod.yaml` supports these placeholders:
+`{{NAME}} {{NAMESPACE}} {{IMAGE}} {{SERVICE_ACCOUNT}} {{PVC_NAME}} {{WORKDIR}} {{CPU}} {{MEMORY}} {{SHELL}} {{LABELS_EXTRA}} {{ENVS}} {{NODE_SELECTOR}}`
+

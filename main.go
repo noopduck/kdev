@@ -124,7 +124,7 @@ func cmdUp() *cobra.Command {
 				"{{CPU}}":       cpu,
 				"{{MEMORY}}":    memory,
 				"{{SHELL}}":     shell,
-				"{{STORAGE_CASS}}": storageClass,
+				"{{STORAGE_CLASS}}": storageClass,
 				"{{STORAGE_SIZE}}": storageSize,
 			}
 

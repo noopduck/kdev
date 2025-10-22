@@ -12,7 +12,8 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 20Gi
+      storage: {{STORAGE_SIZE}}
+  storageClassName: {{STORAGE_CLASS}}
   volumeMode: Filesystem
 ---
 apiVersion: v1

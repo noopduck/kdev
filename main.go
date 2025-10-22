@@ -75,6 +75,8 @@ func cmdUp() *cobra.Command {
 		memory      string
 		nodeSel     []string
 		shell       string
+		storageClass string
+		storageSize string
 	)
 
 	c := &cobra.Command{
@@ -97,6 +99,12 @@ func cmdUp() *cobra.Command {
 				template = filepath.Join("templates", "pod.yaml")
 			}
 			if shell == "" { shell = "/bin/bash" }
+			if storageClass == "" {
+				storageClass = "local-path"
+			}
+			if storageSize == "" {
+				storageSize = "20Gi"
+			}
 
 			b, err := ioutil.ReadFile(template)
 			if err != nil {
@@ -116,6 +124,8 @@ func cmdUp() *cobra.Command {
 				"{{CPU}}":       cpu,
 				"{{MEMORY}}":    memory,
 				"{{SHELL}}":     shell,
+				"{{STORAGE_CASS}}": storageClass,
+				"{{STORAGE_SIZE}}": storageSize,
 			}
 
 			for k, v := range repl {
@@ -190,6 +200,8 @@ func cmdUp() *cobra.Command {
 	c.Flags().StringVar(&memory, "memory", "", "Memory request/limit, e.g. 1Gi")
 	c.Flags().StringSliceVar(&nodeSel, "node", nil, "Node selector key=value (repeatable)")
 	c.Flags().StringVar(&shell, "shell", "", "Login shell inside container (default /bin/bash)")
+	c.Flags().StringVar(&storageClass, "storage-class", "", "StorageClass for the PVC (default local-path)")
+	c.Flags().StringVar(&storageSize, "storage", "", "PVC storage size (default 20Gi)")
 
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("image")

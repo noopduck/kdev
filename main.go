@@ -19,7 +19,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/homedir"
-	ptr "k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 var (
@@ -221,9 +221,9 @@ func cmdUp() *cobra.Command {
 				Spec: corev1.PodSpec{
 					ServiceAccountName: sa,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsUser:  ptr.Int64(1000),
-						RunAsGroup: ptr.Int64(1000),
-						FSGroup:    ptr.Int64(1000),
+						RunAsUser:  ptr.To[int64](1000),
+						RunAsGroup: ptr.To[int64](1000),
+						FSGroup:    ptr.To[int64](1000),
 						SeccompProfile: &corev1.SeccompProfile{
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
@@ -236,12 +236,12 @@ func cmdUp() *cobra.Command {
 						Command:    []string{shell, "-lc", "while true; do sleep 3600; done"},
 						Env:        envVars,
 						SecurityContext: &corev1.SecurityContext{
-							RunAsNonRoot:             ptr.Bool(true),
-							AllowPrivilegeEscalation: ptr.Bool(false),
+							RunAsNonRoot:             ptr.To(true),
+							AllowPrivilegeEscalation: ptr.To(false),
 							Capabilities: &corev1.Capabilities{
 								Drop: []corev1.Capability{"ALL"},
 							},
-							ReadOnlyRootFilesystem: ptr.Bool(false),
+							ReadOnlyRootFilesystem: ptr.To(false),
 						},
 						Resources: resources,
 						VolumeMounts: []corev1.VolumeMount{{

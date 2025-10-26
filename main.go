@@ -1,42 +1,47 @@
 // kdev - lightweight CLI to manage devcontainer pods in Kubernetes.
-// MVP: wraps kubectl and renders a simple Pod template with PVC + RBAC-friendly SA.
+// Uses Kubernetes API directly to manage pods with PVC + RBAC-friendly SA.
 package main
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/client-go/util/homedir"
+	ptr "k8s.io/utils/pointer"
 )
 
 var (
 	flagNamespace string
+	kubeClient    *kubernetes.Clientset
 )
 
-func runKubectl(args ...string) error {
-	cmd := exec.Command("kubectl", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
-}
-
-func runKubectlCapture(args ...string) (string, error) {
-	cmd := exec.Command("kubectl", args...)
-	out := &bytes.Buffer{}
-	errB := &bytes.Buffer{}
-	cmd.Stdout = out
-	cmd.Stderr = errB
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("kubectl %v failed: %w\n%s", strings.Join(args, " "), err, errB.String())
+func initKubeClient() error {
+	// Use the current context from kubeconfig
+	config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), ".kube", "config"))
+	if err != nil {
+		return fmt.Errorf("failed to build kubeconfig: %w", err)
 	}
-	return out.String(), nil
+
+	// Create the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+
+	kubeClient = clientset
+	return nil
 }
 
 func main() {
@@ -46,6 +51,9 @@ func main() {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if flagNamespace == "" {
 				flagNamespace = "dev"
+			}
+			if err := initKubeClient(); err != nil {
+				return fmt.Errorf("failed to initialize kubernetes client: %w", err)
 			}
 			return nil
 		},
@@ -63,20 +71,20 @@ func main() {
 
 func cmdUp() *cobra.Command {
 	var (
-		name        string
-		template    string
-		image       string
-		sa         string
-		pvc         string
-		workdir     string
-		labels      []string
-		envs        []string
-		cpu         string
-		memory      string
-		nodeSel     []string
-		shell       string
+		name         string
+		template     string
+		image        string
+		sa           string
+		pvc          string
+		workdir      string
+		labels       []string
+		envs         []string
+		cpu          string
+		memory       string
+		nodeSel      []string
+		shell        string
 		storageClass string
-		storageSize string
+		storageSize  string
 	)
 
 	c := &cobra.Command{
@@ -98,7 +106,9 @@ func cmdUp() *cobra.Command {
 			if template == "" {
 				template = filepath.Join("templates", "pod.yaml")
 			}
-			if shell == "" { shell = "/bin/bash" }
+			if shell == "" {
+				shell = "/bin/bash"
+			}
 			if storageClass == "" {
 				storageClass = "local-path"
 			}
@@ -106,84 +116,157 @@ func cmdUp() *cobra.Command {
 				storageSize = "20Gi"
 			}
 
-			b, err := ioutil.ReadFile(template)
+			ctx := context.Background()
+
+			// Create PVC
+			pvcSpec := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pvc,
+					Namespace: flagNamespace,
+					Labels: map[string]string{
+						"app":       "kdev",
+						"kdev/name": name,
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse(storageSize),
+						},
+					},
+					StorageClassName: &storageClass,
+					VolumeMode:       &[]corev1.PersistentVolumeMode{corev1.PersistentVolumeFilesystem}[0],
+				},
+			}
+
+			// Create or update PVC
+			_, err := kubeClient.CoreV1().PersistentVolumeClaims(flagNamespace).Create(ctx, pvcSpec, metav1.CreateOptions{})
 			if err != nil {
-				return err
-			}
-			rendered := string(b)
-
-			// simple placeholder replacement
-
-			repl := map[string]string{
-				"{{NAME}}":      name,
-				"{{NAMESPACE}}": flagNamespace,
-				"{{IMAGE}}":     image,
-				"{{SERVICE_ACCOUNT}}": sa,
-				"{{PVC_NAME}}":  pvc,
-				"{{WORKDIR}}":   workdir,
-				"{{CPU}}":       cpu,
-				"{{MEMORY}}":    memory,
-				"{{SHELL}}":     shell,
-				"{{STORAGE_CLASS}}": storageClass,
-				"{{STORAGE_SIZE}}": storageSize,
+				return fmt.Errorf("failed to create PVC: %w", err)
 			}
 
-			for k, v := range repl {
-				if v == "" {
-					continue
+			// Create ServiceAccount if it doesn't exist
+			saSpec := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sa,
+					Namespace: flagNamespace,
+				},
+			}
+
+			_, err = kubeClient.CoreV1().ServiceAccounts(flagNamespace).Create(ctx, saSpec, metav1.CreateOptions{})
+			if err != nil && !strings.Contains(err.Error(), "already exists") {
+				return fmt.Errorf("failed to create ServiceAccount: %w", err)
+			}
+
+			// Create Pod
+			podLabels := map[string]string{
+				"app":       "kdev",
+				"kdev/name": name,
+			}
+
+			// Add custom labels
+			for _, label := range labels {
+				parts := strings.SplitN(label, "=", 2)
+				if len(parts) == 2 {
+					podLabels[parts[0]] = parts[1]
 				}
-				rendered = strings.ReplaceAll(rendered, k, v)
 			}
 
-			// labels
-
-			if len(labels) > 0 {
-				lbl := make([]string, 0, len(labels))
-				for _, kv := range labels { lbl = append(lbl, "  "+kv) }
-				rendered = strings.ReplaceAll(rendered, "{{LABELS_EXTRA}}", strings.Join(lbl, "\n"))
-			} else {
-				rendered = strings.ReplaceAll(rendered, "{{LABELS_EXTRA}}", "")
-			}
-
-			// envs
-
-			if len(envs) > 0 {
-				var lines []string
-				for _, kv := range envs { // KEY=VAL
-					parts := strings.SplitN(kv, "=", 2)
-					if len(parts) != 2 { continue }
-					lines = append(lines, fmt.Sprintf("        - name: %s\n          value: \"%s\"", parts[0], strings.ReplaceAll(parts[1], "\"", "\\\"")))
+			// Parse node selector
+			nodeSelector := make(map[string]string)
+			for _, sel := range nodeSel {
+				parts := strings.SplitN(sel, "=", 2)
+				if len(parts) == 2 {
+					nodeSelector[parts[0]] = parts[1]
 				}
-				rendered = strings.ReplaceAll(rendered, "{{ENVS}}", strings.Join(lines, "\n"))
-			} else {
-				rendered = strings.ReplaceAll(rendered, "{{ENVS}}", "")
 			}
 
-			// nodeSelector
-
-			if len(nodeSel) > 0 {
-				var lines []string
-				for _, kv := range nodeSel { // key=val
-					parts := strings.SplitN(kv, "=", 2)
-					if len(parts) != 2 { continue }
-					lines = append(lines, fmt.Sprintf("    %s: \"%s\"", parts[0], strings.ReplaceAll(parts[1], "\"", "\\\"")))
+			// Parse environment variables
+			var envVars []corev1.EnvVar
+			for _, env := range envs {
+				parts := strings.SplitN(env, "=", 2)
+				if len(parts) == 2 {
+					envVars = append(envVars, corev1.EnvVar{
+						Name:  parts[0],
+						Value: parts[1],
+					})
 				}
-				rendered = strings.ReplaceAll(rendered, "{{NODE_SELECTOR}}", strings.Join(lines, "\n"))
-			} else {
-				rendered = strings.ReplaceAll(rendered, "{{NODE_SELECTOR}}", "")
 			}
 
-			// apply via kubectl
+			// Create resource requirements if specified
+			resources := corev1.ResourceRequirements{}
+			if cpu != "" || memory != "" {
+				resources.Requests = make(corev1.ResourceList)
+				resources.Limits = make(corev1.ResourceList)
 
-			apply := exec.Command("kubectl", "apply", "-n", flagNamespace, "-f", "-")
-			apply.Stdin = strings.NewReader(rendered)
-			apply.Stdout = os.Stdout
-			apply.Stderr = os.Stderr
-			if err := apply.Run(); err != nil {
-				return err
+				if cpu != "" {
+					cpuResource := resource.MustParse(cpu)
+					resources.Requests[corev1.ResourceCPU] = cpuResource
+					resources.Limits[corev1.ResourceCPU] = cpuResource
+				}
+				if memory != "" {
+					memResource := resource.MustParse(memory)
+					resources.Requests[corev1.ResourceMemory] = memResource
+					resources.Limits[corev1.ResourceMemory] = memResource
+				}
 			}
 
-			fmt.Printf("\nPod %s applied in ns/%s. Use 'kdev attach %s -n %s' to enter.\n", name, flagNamespace, name, flagNamespace)
+			podSpec := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: flagNamespace,
+					Labels:    podLabels,
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: sa,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:  ptr.Int64(1000),
+						RunAsGroup: ptr.Int64(1000),
+						FSGroup:    ptr.Int64(1000),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
+					NodeSelector: nodeSelector,
+					Containers: []corev1.Container{{
+						Name:       "dev",
+						Image:      image,
+						WorkingDir: workdir,
+						Command:    []string{shell, "-lc", "while true; do sleep 3600; done"},
+						Env:        envVars,
+						SecurityContext: &corev1.SecurityContext{
+							RunAsNonRoot:             ptr.Bool(true),
+							AllowPrivilegeEscalation: ptr.Bool(false),
+							Capabilities: &corev1.Capabilities{
+								Drop: []corev1.Capability{"ALL"},
+							},
+							ReadOnlyRootFilesystem: ptr.Bool(false),
+						},
+						Resources: resources,
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:      "work",
+							MountPath: workdir,
+						}},
+					}},
+					Volumes: []corev1.Volume{{
+						Name: "work",
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+								ClaimName: pvc,
+							},
+						},
+					}},
+				},
+			}
+
+			// Create Pod
+			_, err = kubeClient.CoreV1().Pods(flagNamespace).Create(ctx, podSpec, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to create Pod: %w", err)
+			}
+
+			fmt.Printf("\nPod %s created in ns/%s. Use 'kdev attach %s -n %s' to enter.\n", name, flagNamespace, name, flagNamespace)
 			return nil
 		},
 	}
@@ -210,7 +293,7 @@ func cmdUp() *cobra.Command {
 
 func cmdAttach() *cobra.Command {
 	var (
-		name string
+		name  string
 		shell string
 	)
 
@@ -218,9 +301,41 @@ func cmdAttach() *cobra.Command {
 		Use:   "attach",
 		Short: "Attach an interactive shell to the dev pod",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if name == "" { return errors.New("--name is required") }
-			if shell == "" { shell = "/bin/bash" }
-			return runKubectl("exec", "-n", flagNamespace, "-it", name, "--", shell)
+			if name == "" {
+				return errors.New("--name is required")
+			}
+			if shell == "" {
+				shell = "/bin/bash"
+			}
+			req := kubeClient.CoreV1().RESTClient().Post().
+				Resource("pods").
+				Name(name).
+				Namespace(flagNamespace).
+				SubResource("exec").
+				VersionedParams(&corev1.PodExecOptions{
+					Command: []string{shell},
+					Stdin:   true,
+					Stdout:  true,
+					Stderr:  true,
+					TTY:     true,
+				}, metav1.ParameterCodec)
+
+			config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), ".kube", "config"))
+			if err != nil {
+				return fmt.Errorf("failed to get kubeconfig: %w", err)
+			}
+
+			exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+			if err != nil {
+				return fmt.Errorf("failed to create executor: %w", err)
+			}
+
+			return exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+				Stdin:  os.Stdin,
+				Stdout: os.Stdout,
+				Stderr: os.Stderr,
+				Tty:    true,
+			})
 		},
 	}
 
@@ -236,7 +351,37 @@ func cmdLS() *cobra.Command {
 		Short: "List dev pods in the namespace",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Namespace: %s\n", flagNamespace)
-			return runKubectl("get", "pods", "-n", flagNamespace, "-l", "app=kdev", "-o", "wide")
+
+			pods, err := kubeClient.CoreV1().Pods(flagNamespace).List(context.Background(), metav1.ListOptions{
+				LabelSelector: "app=kdev",
+			})
+			if err != nil {
+				return fmt.Errorf("failed to list pods: %w", err)
+			}
+
+			if len(pods.Items) == 0 {
+				fmt.Println("No pods found")
+				return nil
+			}
+
+			fmt.Printf("%-30s %-15s %-10s %-20s %-15s\n", "NAME", "READY", "STATUS", "NODE", "AGE")
+			for _, pod := range pods.Items {
+				ready := 0
+				for _, c := range pod.Status.ContainerStatuses {
+					if c.Ready {
+						ready++
+					}
+				}
+				age := time.Since(pod.CreationTimestamp.Time).Round(time.Second)
+				fmt.Printf("%-30s %d/%-13d %-10s %-20s %-15s\n",
+					pod.Name,
+					ready,
+					len(pod.Spec.Containers),
+					pod.Status.Phase,
+					pod.Spec.NodeName,
+					age.String())
+			}
+			return nil
 		},
 	}
 	return c
@@ -244,7 +389,7 @@ func cmdLS() *cobra.Command {
 
 func cmdRM() *cobra.Command {
 	var (
-		name string
+		name      string
 		deletePVC bool
 	)
 
@@ -252,14 +397,25 @@ func cmdRM() *cobra.Command {
 		Use:   "rm",
 		Short: "Delete a dev pod (optionally its PVC)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if name == "" { return errors.New("--name is required") }
-			if err := runKubectl("delete", "pod", "-n", flagNamespace, name); err != nil {
-				return err
+			if name == "" {
+				return errors.New("--name is required")
 			}
+
+			ctx := context.Background()
+
+			if err := kubeClient.CoreV1().Pods(flagNamespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+				return fmt.Errorf("failed to delete pod: %w", err)
+			}
+
 			if deletePVC {
-				if err := runKubectl("delete", "pvc", "-n", flagNamespace, name); err != nil {
-					return err
+				if err := kubeClient.CoreV1().PersistentVolumeClaims(flagNamespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+					return fmt.Errorf("failed to delete PVC: %w", err)
 				}
+			}
+
+			fmt.Printf("Pod %s deleted in namespace %s\n", name, flagNamespace)
+			if deletePVC {
+				fmt.Printf("PVC %s deleted in namespace %s\n", name, flagNamespace)
 			}
 			return nil
 		},
@@ -270,5 +426,3 @@ func cmdRM() *cobra.Command {
 	_ = c.MarkFlagRequired("name")
 	return c
 }
-
-

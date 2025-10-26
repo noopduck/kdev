@@ -25,6 +25,22 @@ go build -o kdev
 ./kdev rm --name mydev -n dev --with-pvc
 ```
 
+## kubeconfig requirement
+
+kdev uses the Kubernetes API (client-go) and therefore needs access to a kubeconfig file to talk to your cluster. By default it will look for kubeconfig at `~/.kube/config` using the normal kube rules.
+
+If your kubeconfig is elsewhere, set the `KUBECONFIG` environment variable or point `kubectl`/client-go to a different file before running kdev. Example:
+
+```bash
+export KUBECONFIG=/path/to/your/kubeconfig
+./kdev ls -n dev
+```
+
+Alternatively use your normal kubectl context configuration (the same kubeconfig locations are honored).
+
+Note: Previously kdev wrapped `kubectl`; the current implementation uses the Kubernetes client library directly and needs a valid kubeconfig to authenticate and connect.
+
+
 ## Template-variable
 `templates/pod.yaml` supports these placeholders:
 `{{NAME}} {{NAMESPACE}} {{IMAGE}} {{SERVICE_ACCOUNT}} {{PVC_NAME}} {{WORKDIR}} {{CPU}} {{MEMORY}} {{SHELL}} {{LABELS_EXTRA}} {{ENVS}} {{NODE_SELECTOR}}`

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	kubeScheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/homedir"
@@ -313,12 +314,13 @@ func cmdAttach() *cobra.Command {
 				Namespace(flagNamespace).
 				SubResource("exec").
 				VersionedParams(&corev1.PodExecOptions{
-					Command: []string{shell},
-					Stdin:   true,
-					Stdout:  true,
-					Stderr:  true,
-					TTY:     true,
-				}, metav1.ParameterCodec)
+					Container: "dev",
+					Command:   []string{shell},
+					Stdin:     true,
+					Stdout:    true,
+					Stderr:    true,
+					TTY:       true,
+				}, kubeScheme.ParameterCodec)
 
 			config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), ".kube", "config"))
 			if err != nil {

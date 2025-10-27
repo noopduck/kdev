@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noopduck/kdev/internal/devcontainer"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -64,7 +65,7 @@ func main() {
 
 	root.AddCommand(cmdUp(), cmdAttach(), cmdLS(), cmdRM())
 
-	root.AddCommand(cmdDevContainer())
+	root.AddCommand(devcontainer.CmdDevContainer())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

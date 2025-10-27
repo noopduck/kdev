@@ -21,7 +21,7 @@ type DevContainerConfig struct {
 }
 
 // Ny kommando: `kdev devcontainer build`
-func cmdDevContainer() *cobra.Command {
+func CmdDevContainer() *cobra.Command {
 	var (
 		push      bool
 		imageName string

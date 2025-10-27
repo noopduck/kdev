@@ -25,6 +25,24 @@ go build -o kdev
 ./kdev rm --name mydev -n dev --with-pvc
 ```
 
+## Devcontainer build
+
+kdev supports building images from a `.devcontainer/devcontainer.json` file. The command requires either an explicit image name or both a registry and tag. Example:
+
+```bash
+# provide registry and tag (image will be <registry>/<name>:<tag>)
+./kdev devcontainer build --registry harbor.example.com --tag v1.2.3 --push
+
+# or provide a full image name (including registry and tag)
+./kdev devcontainer build --image harbor.example.com/myproj/devcontainer:v1.2.3 --push
+```
+
+Flags:
+- `--image` — override the full image name (can include registry and tag)
+- `--registry` and `--tag` — used together to construct image name when `--image` is not provided
+- `--push` — push the image after a successful build
+
+
 ## kubeconfig requirement
 
 kdev uses the Kubernetes API (client-go) and therefore needs access to a kubeconfig file to talk to your cluster. By default it will look for kubeconfig at `~/.kube/config` using the normal kube rules.
@@ -43,5 +61,5 @@ Note: Previously kdev wrapped `kubectl`; the current implementation uses the Kub
 
 ## Template-variable
 `templates/pod.yaml` supports these placeholders:
-`{{NAME}} {{NAMESPACE}} {{IMAGE}} {{SERVICE_ACCOUNT}} {{PVC_NAME}} {{WORKDIR}} {{CPU}} {{MEMORY}} {{SHELL}} {{LABELS_EXTRA}} {{ENVS}} {{NODE_SELECTOR}}`
+`{{NAME}} {{NAMESPACE}} {{IMAGE}} {{SERVICE_ACCOUNT}} {{PVC_NAME}} {{WORKDIR}} {{CPU}} {{MEMORY}} {{SHELL}} {{LABELS_EXTRA}} {{ENVS}} {{NODE_SELECTOR}} {{STORAGE_CLASS}} {{STORAGE_SIZE}}`
 

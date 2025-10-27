@@ -25,6 +25,8 @@ func CmdDevContainer() *cobra.Command {
 	var (
 		push      bool
 		imageName string
+		registry  string
+		tag       string
 	)
 
 	c := &cobra.Command{
@@ -49,17 +51,25 @@ func CmdDevContainer() *cobra.Command {
 				cfg.Build.Context = "."
 			}
 
+			// Resolve image name:
+			// - If --image provided, use that (may include registry and tag)
+			// - Otherwise require both --registry and --tag
 			if imageName == "" {
-				imageName = fmt.Sprintf("harbor.intern.k8s.darkworks.no/dev/%s:latest", cfg.Name)
+				if registry == "" || tag == "" {
+					return fmt.Errorf("either --image or both --registry and --tag must be provided")
+				}
+				imageName = fmt.Sprintf("%s/%s:%s", registry, cfg.Name, tag)
 			}
 
 			dockerfile := filepath.Join(".devcontainer", cfg.Build.Dockerfile)
 			context := cfg.Build.Context
 
-			// Build args
+			// Build args (handle nil map)
 			var buildArgs []string
-			for k, v := range cfg.Build.Args {
-				buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("%s=%s", k, v))
+			if cfg.Build.Args != nil {
+				for k, v := range cfg.Build.Args {
+					buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("%s=%s", k, v))
+				}
 			}
 
 			argsList := append([]string{"build", "-f", dockerfile, "-t", imageName}, buildArgs...)
@@ -89,7 +99,9 @@ func CmdDevContainer() *cobra.Command {
 	}
 
 	buildCmd.Flags().BoolVar(&push, "push", false, "Push the built image to registry")
-	buildCmd.Flags().StringVar(&imageName, "image", "", "Override image name (default derived from devcontainer.json name)")
+	buildCmd.Flags().StringVar(&imageName, "image", "", "Override image name (can include registry and tag)")
+	buildCmd.Flags().StringVar(&registry, "registry", "", "Container registry (e.g. harbor.example.com) — required if --image not set")
+	buildCmd.Flags().StringVar(&tag, "tag", "", "Image tag (required if --image not set)")
 	c.AddCommand(buildCmd)
 
 	return c

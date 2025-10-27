@@ -42,6 +42,21 @@ Flags:
 - `--registry` and `--tag` — used together to construct image name when `--image` is not provided
 - `--push` — push the image after a successful build
 
+Note about the devcontainers CLI and `npm`
+
+If your `.devcontainer/devcontainer.json` uses `features` you likely want the official devcontainers CLI to build the image so features are applied correctly. The devcontainers CLI is distributed via npm (Node.js). That means you need `node`/`npm` available to install it with the standard npm workflow. Example install:
+
+```bash
+# install globally via npm (requires Node.js/npm on your machine)
+npm install -g @devcontainers/cli
+
+# then build with kdev using the CLI to apply features
+./kdev devcontainer build --registry harbor.example.com --tag v1.2.3 --use-devcontainers-cli
+```
+
+If you don't want to install via npm you can use the install script from the project (see devcontainers CLI docs) or build the image yourself and provide the resulting image to `kdev` with `--image`.
+
+
 
 ## kubeconfig requirement
 
